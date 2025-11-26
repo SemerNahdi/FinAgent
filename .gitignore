@@ -1,0 +1,90 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Pytest
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment / virtualenv
+.env
+.venv/
+venv/
+ENV/
+env.bak/
+env/
+
+# Logs
+*.log
+
+# Database / local files
+*.sqlite3
+db/*.db
+db/*.sqlite3
+*.csv
+
+# FAISS or embeddings
+db/*.index
+db/*.pkl
+db/*.faiss
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Misc
+*.bak
+*.swp
+
+/data/
+data/
