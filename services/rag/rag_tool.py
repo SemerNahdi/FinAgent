@@ -9,13 +9,11 @@ from services.rag.chunking import chunk_content
 from services.rag.embeddings import FaissIndex
 from groq import Groq
 import os
-
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DEFAULT_MODEL = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
-
 
 class RAGTool:
     def __init__(
@@ -71,14 +69,12 @@ class RAGTool:
             safe_name = "".join(c if c.isalnum() else "_" for c in f.name)
             chunk_file = folder / f"{safe_name}_chunk{i+1}.txt"
             chunk_file.write_text(chunk, encoding="utf-8")
-            metadatas.append(
-                {
-                    "doc_id": doc_id,
-                    "chunk_id": i,
-                    "meta": {"source": f.name},
-                    "content": chunk,
-                }
-            )
+            metadatas.append({
+                "doc_id": doc_id,
+                "chunk_id": i,
+                "meta": {"source": f.name},
+                "content": chunk
+            })
 
         self.index.add(chunks, metadatas)
         self.index.save(self.index_dir)
@@ -101,21 +97,16 @@ class RAGTool:
                 {"role": "user", "content": prompt},
             ],
             max_tokens=512,
-            temperature=0.1,
+            temperature=0.1
         )
         return response.choices[0].message.content.strip()
 
     def _build_prompt(self, query: str, retrieved: List[Dict]) -> str:
-        parts = [
-            "You are a helpful financial assistant. Use the sources to answer concisely.",
-            "\n\n---\nSources:\n",
-        ]
+        parts = ["You are a helpful financial assistant. Use the sources to answer concisely.", "\n\n---\nSources:\n"]
         for i, hit in enumerate(retrieved):
             md = hit["metadata"]
             src = md.get("meta", {}).get("source", md.get("doc_id", "unknown"))
             snippet = md.get("content", "")[:1200]
-            parts.append(
-                f"[{i}] Source: {src}  (score: {hit['score']:.3f})\nChunk ID: {md.get('chunk_id')}\nContent: {snippet}\n\n"
-            )
+            parts.append(f"[{i}] Source: {src}  (score: {hit['score']:.3f})\nChunk ID: {md.get('chunk_id')}\nContent: {snippet}\n\n")
         parts.append(f"\nQuestion:\n{query}\n\nAnswer:")
         return "\n".join(parts)

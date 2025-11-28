@@ -5,3 +5,7 @@ groq
 numpy
 pandas
 python-dotenv
+yfinance
+pytest 
+pytest-mock
+pytest-sugar
