@@ -6,10 +6,20 @@ import faiss
 from sentence_transformers import SentenceTransformer
 import os
 import pickle
+from dotenv import load_dotenv
+
+# Load .env once
+load_dotenv()
 
 
 class FaissIndex:
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", dim: Optional[int] = None):
+    def __init__(self, model_name: Optional[str] = None, dim: Optional[int] = None):
+        # Use constructor arg > .env > hardcoded default
+        model_name = (
+            model_name
+            or os.getenv("EMBEDDING_MODEL")
+            or "sentence-transformers/all-MiniLM-L6-v2"
+        )
         self.model = SentenceTransformer(model_name)
         self.dim = dim or self.model.get_sentence_embedding_dimension()
         self.index = faiss.IndexFlatIP(self.dim)
@@ -47,8 +57,14 @@ class FaissIndex:
             pickle.dump(self.metadatas, fh)
 
     @classmethod
-    def load(cls, path: str, model_name: str = "all-MiniLM-L6-v2"):
+    def load(cls, path: str, model_name: Optional[str] = None):
         p = Path(path)
+        # Use constructor arg > .env > default
+        model_name = (
+            model_name
+            or os.getenv("EMBEDDING_MODEL")
+            or "sentence-transformers/all-MiniLM-L6-v2"
+        )
         inst = cls(model_name=model_name)
         inst.index = faiss.read_index(str(p / "index.faiss"))
         with open(p / "metadatas.pkl", "rb") as fh:

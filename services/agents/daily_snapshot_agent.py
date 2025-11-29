@@ -1,4 +1,4 @@
-# services/email/daily_snapshot_agent.py
+# services/daily_snapshot_agent.py
 
 from services.email.daily_snapshot_tool import DailySnapshotTool
 from services.email.email_tool import EmailTool

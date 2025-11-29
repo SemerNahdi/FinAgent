@@ -1,6 +1,6 @@
 # services/rag/rag_agent.py
+import asyncio
 from services.rag.rag_tool import RAGTool
-from pathlib import Path
 
 
 class RAGAgent:
@@ -23,9 +23,10 @@ class RAGAgent:
         )
 
     def run(self, query: str, top_k: int = 3):
-        """Retrieve relevant chunks and generate LLM answer."""
+        """Sync RAG execution."""
         hits = self.rag.index.search(query, k=top_k)
         prompt = self.rag._build_prompt(query, hits)
+
         response = self.rag.client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -35,4 +36,14 @@ class RAGAgent:
             max_tokens=512,
             temperature=0.1,
         )
+
         return response.choices[0].message.content.strip()
+
+    async def run_async(self, query: str, top_k: int = 3):
+        """Async wrapper so MCPAgent can await this agent."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.run, query, top_k)
+
+    def get_portfolio_summary(self):
+        """MCPAgent may call this. RAG returns empty."""
+        return []

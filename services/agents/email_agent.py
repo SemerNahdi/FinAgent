@@ -45,3 +45,24 @@ class EmailAgent:
             return f"Daily snapshot email sent to {to}"
         except Exception as e:
             return f"Failed to send daily snapshot: {str(e)}"
+
+    # -------------------------------
+    # New run method for MCPAgent
+    # -------------------------------
+    def run(self, query: str) -> str:
+        """
+        Generic run method to satisfy MCPAgent.
+        Recognizes simple commands like:
+        - "send daily snapshot to someone@example.com"
+        """
+        query = query.lower().strip()
+
+        if "daily snapshot" in query:
+            # Extract email address from query if present
+            import re
+
+            match = re.search(r"to\s+([\w\.\-]+@[\w\.\-]+)", query)
+            to_email = match.group(1) if match else "semernahdi25@gmail.com"
+            return self._send_daily_snapshot(to_email)
+
+        return f"EmailAgent: unrecognized query '{query}'"
