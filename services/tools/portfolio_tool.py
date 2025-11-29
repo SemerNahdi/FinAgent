@@ -1,6 +1,9 @@
 # services/tools/portfolio_tool.py
 import pandas as pd
 import yfinance as yf
+from datetime import datetime, timedelta
+from functools import lru_cache
+from typing import Dict, Optional
 
 
 class PortfolioTool:
@@ -20,31 +23,58 @@ class PortfolioTool:
     # ----------------------------------------------------------------------
     # FETCH PRICES
     # ----------------------------------------------------------------------
-    def fetch_prices(self) -> dict:
+    def fetch_prices(self) -> Dict[str, float]:
         """Fetch latest prices from Yahoo Finance for tickers."""
+        tickers = self.portfolio_df["Ticker"].unique().tolist()
+        data = yf.download(tickers, period="1d", progress=False)["Close"]
         prices = {}
-        for ticker in self.portfolio_df["Ticker"]:
-            stock = yf.Ticker(ticker)
-            price = stock.info.get("regularMarketPrice")
-            if price is None:
+        for ticker in tickers:
+            if ticker in data.columns:
+                prices[ticker] = (
+                    data[ticker].dropna().iloc[-1]
+                    if not data[ticker].dropna().empty
+                    else None
+                )
+            else:
+                prices[ticker] = None
+            if prices[ticker] is None:
                 raise ValueError(f"No price data found for {ticker}")
-            prices[ticker] = price
+        return prices
+
+    @lru_cache(maxsize=10)
+    def fetch_historical_prices(self, date: str) -> Dict[str, float]:
+        """Fetch historical closing prices for all tickers on a given date."""
+        tickers = self.portfolio_df["Ticker"].unique().tolist()
+        end_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        )
+        data = yf.download(tickers, start=date, end=end_date, progress=False)["Close"]
+        prices = {}
+        for ticker in tickers:
+            if ticker in data.columns:
+                prices[ticker] = (
+                    data[ticker].dropna().iloc[-1]
+                    if not data[ticker].dropna().empty
+                    else None
+                )
+            else:
+                prices[ticker] = None
         return prices
 
     # ----------------------------------------------------------------------
     # BASIC PORTFOLIO INFO
     # ----------------------------------------------------------------------
     def has_stock(self, ticker: str) -> bool:
-        return ticker.upper() in self.portfolio_df["Ticker"].values
+        return ticker.upper() in self.portfolio_df["Ticker"].str.upper().values
 
     def get_quantity(self, ticker: str) -> int:
         df = self.portfolio_df
-        row = df[df["Ticker"] == ticker.upper()]
+        row = df[df["Ticker"].str.upper() == ticker.upper()]
         return int(row["Quantity"].values[0]) if not row.empty else 0
 
     def get_purchase_info(self, ticker: str) -> dict:
         df = self.portfolio_df
-        row = df[df["Ticker"] == ticker.upper()]
+        row = df[df["Ticker"].str.upper() == ticker.upper()]
 
         if row.empty:
             return {}
@@ -53,8 +83,8 @@ class PortfolioTool:
         return {
             "Cost_Basis": float(row["Cost_Basis"]),
             "Purchase_Date": row["Purchase_Date"],
-            "Company": row["Company"] if "Company" in df.columns else "",
-            "Sector": row["Sector"] if "Sector" in df.columns else "",
+            "Company": row.get("Company", ""),
+            "Sector": row.get("Sector", ""),
         }
 
     def get_portfolio_summary(self) -> list:
@@ -63,16 +93,16 @@ class PortfolioTool:
     # ----------------------------------------------------------------------
     # ANALYSIS METHODS
     # ----------------------------------------------------------------------
-    def get_current_value(self, price_lookup: dict) -> float:
-        total = 0
+    def get_current_value(self, price_lookup: Dict[str, float]) -> float:
+        total = 0.0
         for row in self.portfolio_df.itertuples():
-            total += row.Quantity * price_lookup.get(row.Ticker, 0)
+            total += row.Quantity * price_lookup.get(row.Ticker, 0.0)
         return total
 
-    def get_profit_loss(self, price_lookup: dict) -> dict:
+    def get_profit_loss(self, price_lookup: Dict[str, float]) -> dict:
         result = {}
         for row in self.portfolio_df.itertuples():
-            current = price_lookup.get(row.Ticker, 0)
+            current = price_lookup.get(row.Ticker, 0.0)
             cost = row.Cost_Basis
             result[row.Ticker] = {
                 "quantity": row.Quantity,
@@ -91,14 +121,18 @@ class PortfolioTool:
             sector = getattr(row, "Sector", "Unknown")
             allocation[sector] = allocation.get(sector, 0) + row.Quantity
 
-        return {s: round((q / total_quantity) * 100, 2) for s, q in allocation.items()}
+        return {
+            s: round((q / total_quantity) * 100, 2)
+            for s, q in allocation.items()
+            if total_quantity > 0
+        }
 
     def get_purchase_timeline(self) -> pd.DataFrame:
         df = self.portfolio_df.copy()
         df["Purchase_Date"] = pd.to_datetime(df["Purchase_Date"])
         return df.sort_values("Purchase_Date", ascending=False)
 
-    def top_holdings(self, n=5) -> pd.DataFrame:
+    def top_holdings(self, n: int = 5) -> pd.DataFrame:
         return self.portfolio_df.nlargest(n, "Quantity")
 
     def filter_by_purchase_date(self, start_date: str, end_date: str) -> pd.DataFrame:
@@ -107,10 +141,22 @@ class PortfolioTool:
         mask = (df["Purchase_Date"] >= start_date) & (df["Purchase_Date"] <= end_date)
         return df.loc[mask]
 
+    def get_price_changes(self, reference_date: str) -> Dict[str, Optional[float]]:
+        """Compute % change since reference date for each ticker."""
+        current_prices = self.fetch_prices()
+        ref_prices = self.fetch_historical_prices(reference_date)
+        changes = {}
+        for ticker, current in current_prices.items():
+            ref = ref_prices.get(ticker)
+            changes[ticker] = (
+                round((current - ref) / ref * 100, 2) if ref and ref > 0 else None
+            )
+        return changes
+
     # ----------------------------------------------------------------------
     # PORTFOLIO ANALYSIS SUMMARY
     # ----------------------------------------------------------------------
-    def analyze(self) -> dict:
+    def analyze(self, include_changes: Optional[str] = None) -> dict:
         """
         Returns portfolio analysis:
         - total value
@@ -129,7 +175,7 @@ class PortfolioTool:
         sector_alloc = self.get_sector_allocation()
         pl_details = self.get_profit_loss(prices)
 
-        return {
+        analysis = {
             "total_value": total_value,
             "total_cost": total_cost,
             "total_gain_loss": total_gain_loss,
@@ -137,6 +183,11 @@ class PortfolioTool:
             "profit_loss_details": pl_details,
             "portfolio_records": self.get_portfolio_summary(),
         }
+
+        if include_changes:
+            analysis["change_since_date"] = self.get_price_changes(include_changes)
+
+        return analysis
 
 
 # ----------------------------------------------------------------------

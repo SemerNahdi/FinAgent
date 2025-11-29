@@ -9,3 +9,5 @@ yfinance
 pytest 
 pytest-mock
 pytest-sugar
+langchain 
+langchain-core
