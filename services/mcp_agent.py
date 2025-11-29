@@ -7,131 +7,148 @@ from services.tools.groq_wrapper import GroqLLM
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+import re
+
+# services/agents/mcp_agent_polished.py
+import asyncio
+import re
+
 
 class MCPAgent:
     """
-    Async MCP Agent using Groq for context-aware tool selection.
+    Multi-agent orchestrator that merges responses from stock, RAG, portfolio, and email agents
+    into a single polished, human-readable format with markdown formatting.
     """
 
     def __init__(self, agents: dict):
+        """
+        agents: dict with keys 'stock', 'rag', 'portfolio', 'email' mapping to agent instances
+        """
         self.agents = agents
-        self.llm = GroqLLM()  # Groq wrapper
 
-        # Descriptions for each agent/tool
-        self.tool_descriptions = {
-            "portfolio": (
-                "Analyzes user portfolios, computes total value, profit/loss, "
-                "sector allocation, top holdings, and historical performance."
-            ),
-            "rag": "Answers queries from uploaded PDFs, CSVs, and JSONs.",
-            "stock": "Provides stock prices, top market movers, and market summaries.",
-            "summarizer": "Summarizes financial reports or extracted content.",
-            "email": "Sends daily snapshots, alerts, and custom emails.",
-        }
-
-    async def run_agent(self, agent_name: str, query: str):
-        agent = self.agents.get(agent_name)
-        if not agent:
-            return f"[Agent '{agent_name}' not found]"
+    # ------------------------
+    # Agent handlers
+    # ------------------------
+    async def _handle_stock(self, query):
         try:
-            if asyncio.iscoroutinefunction(agent.run):
-                result = await agent.run(query)
+            res = self.agents["stock"].run(query)
+            if not res or "error" in res:
+                return ""
+            # Price
+            if "current_price" in res:
+                return f"- **Stock Price:** The current price of **{res['ticker']}** is **${res['current_price']}**."
+            # Moving average
+            elif any(k.endswith("_day_ma") for k in res.keys()):
+                period_key = [k for k in res if k.endswith("_day_ma")][0]
+                return f"- **{period_key.replace('_','-').capitalize()}:** {res['ticker']} = **${res[period_key]}**."
+            # Summary or other
             else:
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, agent.run, query)
-            return f"[{agent_name}]: {result}"
-        except Exception as e:
-            logger.error(f"Error running agent '{agent_name}': {e}")
-            return f"[{agent_name} error: {str(e)}]"
+                return f"- **Stock Info ({res.get('ticker','')}):** {res}"
+        except Exception:
+            return ""
 
-    async def run(self, query: str):
-        """
-        Run the MCP agent for a user query:
-        1. Ask Groq which agents/tools to call.
-        2. Run all selected agents asynchronously.
-        3. Aggregate results.
-        """
-        plan = await self.plan_tools(query)
-        tasks = [self.run_agent(agent_name, query) for agent_name in plan]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Convert exceptions to readable messages
-        normalized_results = [
-            str(r) if isinstance(r, Exception) else r for r in results
-        ]
-
-        return self.aggregate(normalized_results)
-
-    async def plan_tools(self, query: str):
-        """
-        Ask Groq which tools to call based on query + current context.
-        Returns a normalized list of agent names.
-        """
-        # Gather context
-        context = {
-            "portfolio": getattr(
-                self.agents.get("portfolio"), "get_portfolio_summary", lambda: []
-            )(),
-            "stock_agents": getattr(
-                self.agents.get("stock"), "get_top_movers", lambda: []
-            )(),
-            "email_tools": ["daily_snapshot", "alerts"],
-            "available_agents": list(self.agents.keys()),
-        }
-
-        descriptions_text = "\n".join(
-            f"{name}: {desc}"
-            for name, desc in self.tool_descriptions.items()
-            if name in context["available_agents"]
-        )
-
-        # Groq prompt with strict JSON and example
-        prompt = f"""
-You are a multi-agent planner for a finance assistant. 
-Available agents with descriptions:
-{descriptions_text}
-
-Portfolio snapshot: {context['portfolio']}
-Top stock movers: {context['stock_agents']}
-Email capabilities: {context['email_tools']}
-
-Determine which agents should handle the following user query:
-"{query}"
-
-IMPORTANT:
-- Respond ONLY with a valid JSON array of strings.
-- Each string must be the exact name of an agent (e.g., "rag", "portfolio", "stock", "email", "summarizer").
-- Do NOT include any extra text or explanations outside the JSON array.
-- Example output: ["rag", "email"]
-"""
-        logger.info("Sending prompt to Groq for planning...")
-        logger.debug(f"Prompt: {prompt}")
-
+    async def _handle_rag(self, query):
         try:
-            tools_response = await self.llm.call_json_async(prompt)
-            # Normalize response: always a list
-            if isinstance(tools_response, dict) and "plan" in tools_response:
-                tools = tools_response["plan"]
-            elif isinstance(tools_response, list):
-                tools = tools_response
-            elif isinstance(tools_response, str):
-                tools = [tools_response]
-            else:
-                tools = ["rag"]
+            res = await self.agents["rag"].run_async(query)
+            if res:
+                return f"- **RAG Insight:** {res}"
+            return ""
+        except Exception:
+            return ""
 
-            if not tools:
-                logger.warning("Groq returned empty list, defaulting to ['rag']")
-                tools = ["rag"]
+    async def _handle_portfolio(self, query):
+        try:
+            analysis = self.agents["portfolio"].run(query)
+            if not analysis:
+                return ""
+            top = self.agents["portfolio"].top_holdings(5)
+            sectors = self.agents["portfolio"].sector_allocation()
 
-            logger.info(f"Groq selected tools: {tools}")
-        except Exception as e:
-            logger.error(f"Groq planning failed, defaulting to ['rag']: {e}")
-            tools = ["rag"]
+            top_holdings_text = "\n".join(
+                [f"  - {t['ticker']}: ${t['value']}" for t in top]
+            )
+            sector_text = "\n".join([f"  - {s}: {p}%" for s, p in sectors.items()])
 
-        return tools
+            return (
+                f"- **Portfolio Summary:**\n"
+                f"  **Top 5 Holdings:**\n{top_holdings_text}\n"
+                f"  **Sector Allocation:**\n{sector_text}"
+            )
+        except Exception:
+            return ""
 
-    def aggregate(self, results: list):
+    async def _handle_email(self, query):
+        try:
+            res = self.agents["email"].run(query)
+            if "unrecognized" in res:
+                return ""
+            return f"- **Email Action:** {res}"
+        except Exception:
+            return ""
+
+    # ------------------------
+    # Query splitting
+    # ------------------------
+    def _split_query(self, query):
         """
-        Combine multiple agent outputs into a single formatted string.
+        Splits multi-part queries into agent-specific chunks
         """
-        return "\n\n".join(results)
+        chunks = []
+
+        if re.search(
+            r"(price of|current price of|\d+[- ]?day ma|summary of|stock summary)",
+            query,
+            re.I,
+        ):
+            chunks.append(("stock", query))
+
+        if re.search(
+            r"(explain|what is|who|give info|finance|investment|analysis)", query, re.I
+        ):
+            chunks.append(("rag", query))
+
+        if re.search(
+            r"(portfolio|top holdings|sector allocation|filter by date)", query, re.I
+        ):
+            chunks.append(("portfolio", query))
+
+        if "daily snapshot" in query.lower():
+            chunks.append(("email", query))
+
+        return chunks
+
+    # ------------------------
+    # Merge responses into human-readable markdown
+    # ------------------------
+    def _merge_responses(self, responses: list) -> str:
+        """
+        Merge all agent outputs into a single human-readable markdown string.
+        Supports bullets, bold/italic formatting, links, and structured sections.
+        """
+        # Filter empty
+        valid = [r for r in responses if r]
+        if not valid:
+            return "Sorry, I couldn't find an answer. Try rephrasing your query."
+
+        # Join with two line breaks for readability
+        return "\n\n".join(valid)
+
+    # ------------------------
+    # Main entry
+    # ------------------------
+    async def run(self, query: str) -> str:
+        chunks = self._split_query(query)
+        tasks = []
+
+        for agent_type, chunk_query in chunks:
+            if agent_type == "stock":
+                tasks.append(self._handle_stock(chunk_query))
+            elif agent_type == "rag":
+                tasks.append(self._handle_rag(chunk_query))
+            elif agent_type == "portfolio":
+                tasks.append(self._handle_portfolio(chunk_query))
+            elif agent_type == "email":
+                tasks.append(self._handle_email(chunk_query))
+
+        results = await asyncio.gather(*tasks)
+        return self._merge_responses(results)

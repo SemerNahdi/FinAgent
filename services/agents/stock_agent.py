@@ -1,4 +1,5 @@
 # services/agents/stock_agent.py
+
 from services.tools.stock_tool import StockTool
 import re
 
@@ -12,13 +13,6 @@ class StockAgent:
         self.tool = stock_tool
 
     def handle_query(self, query: str):
-        """
-        Simple parser to handle queries like:
-        - "price of AAPL"
-        - "5-day MA of TSLA"
-        - "summary of MSFT"
-        """
-
         query = query.lower().strip()
 
         # Price query
@@ -42,7 +36,10 @@ class StockAgent:
             ticker = summary_match.group(2).upper()
             return self.tool.get_summary(ticker)
 
-        # Unknown query
         return {
             "error": "Query not recognized. Try: 'price of TICKER', '5-day MA of TICKER', or 'summary of TICKER'"
         }
+
+    # Add this method so MCPAgent can call it
+    def run(self, query: str):
+        return self.handle_query(query)

@@ -1,20 +1,13 @@
-import asyncio
-from services.agents import (
-    daily_snapshot_agent,
-    portfolio_agent,
-    rag_agent,
-    stock_agent,
+# backend/main.py
+from fastapi import FastAPI
+from api.routes import router
+
+app = FastAPI(
+    title="Finance Assistant",
+    description="Multi-agent financial assistant with RAG, portfolio, stock, and email tools",
+    version="1.0.0",
 )
-from services.mcp_agent import MCPAgent
 
-agents = {
-    "portfolio": portfolio_agent,
-    "rag": rag_agent,
-    "email": daily_snapshot_agent,
-    "stock": stock_agent,
-}
-
-mcp = MCPAgent(agents)
-
-result = asyncio.run(mcp.run("Send today's portfolio snapshot to my email"))
-print(result)
+# Include routes
+app.include_router(router, prefix="/api")
+# uvicorn main:app --reload
