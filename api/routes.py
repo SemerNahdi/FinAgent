@@ -69,12 +69,8 @@ async def ask(query: Query):
     4. Merge responses intelligently
     """
     try:
-        response, agents_used, cache_hit = await mcp.run(query.question)
-        return {
-            "response": response,
-            "agents_used": agents_used,
-            "cache_hit": cache_hit,
-        }
+        response, agents_used = await mcp.run(query.question)
+        return {"response": response, "agents_used": agents_used}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
