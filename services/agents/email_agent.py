@@ -56,8 +56,17 @@ class EmailAgent:
         - "send daily snapshot to someone@example.com"
         """
         query = query.lower().strip()
+        email_keywords = [
+            "daily snapshot",
+            "send email",
+            "email report",
+            "notify",
+            "send me",
+            "daily report",
+            "mail me",
+        ]
 
-        if "daily snapshot" in query:
+        if any(key in query for key in email_keywords):
             # Extract email address from query if present
             import re
 
