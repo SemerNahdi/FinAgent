@@ -47,6 +47,7 @@ class Query(BaseModel):
 
 class QueryResponse(BaseModel):
     response: str
+    sources: list
     agents_used: Optional[list] = None
     cache_hit: Optional[bool] = None
 
@@ -58,21 +59,29 @@ class CacheStats(BaseModel):
 
 
 @router.post("/ask", response_model=QueryResponse)
-async def ask(query: Query):
-    """
-    Main query endpoint with enhanced intelligent routing.
-
-    The orchestrator will:
-    1. Analyze query intent to determine relevant agents
-    2. Execute agents in parallel (respecting dependencies)
-    3. Return cached results when available
-    4. Merge responses intelligently
-    """
+async def ask(query: Query, language: str = "English", style: str = "professional"):
     try:
-        response, agents_used = await mcp.run(query.question)
-        return {"response": response, "agents_used": agents_used}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        final_result, agents_used, cache_hit = await mcp.run(
+            query.question, language=language, style=style
+        )
+
+        return {
+            "response": final_result.get("response", ""),
+            "sources": final_result.get("sources", []),
+            "agents_used": agents_used,
+            "cache_hit": cache_hit,
+        }
+
+    except Exception:
+        return {
+            "response": (
+                "An error occurred while processing your query. "
+                "Please contact the technical team at semernahdi25@gmail.com for assistance."
+            ),
+            "sources": [],
+            "agents_used": [],
+            "cache_hit": None,
+        }
 
 
 @router.get("/cache/stats", response_model=CacheStats)

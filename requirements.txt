@@ -11,3 +11,7 @@ pytest-mock
 pytest-sugar
 langchain 
 langchain-core
+aiohttp 
+async-timeout
+fastapi
+uvicorn

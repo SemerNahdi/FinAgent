@@ -1,93 +1,23 @@
+# File: mcp_agent.py
+# Main MCPAgent class that ties everything together
+# Imports from other files
+
 import re
-from typing import Dict, List, Optional
-from enum import Enum
-from dataclasses import dataclass
-from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 import asyncio
 import time
 import logging
+from collections import defaultdict
+
+from services.tools.groq_wrapper import GroqLLM
+from services.MCP.enums import AgentType, AgentConfig
+from services.MCP.intent import QueryIntent
+from services.MCP.cache import CacheManager
+from services.MCP.handlers import handle_generic, handle_portfolio, handle_email
+from services.MCP.prompts import build_agent_summary, create_system_prompt
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-
-class AgentType(Enum):
-    STOCK = "stock"
-    RAG = "rag"
-    PORTFOLIO = "portfolio"
-    EMAIL = "email"
-    WEBSEARCH = "websearch"
-
-
-@dataclass
-class AgentConfig:
-    type: AgentType
-    pattern: re.Pattern
-    priority: int
-    dependencies: set[AgentType]
-    required_keywords: set[str]
-    cache_ttl: int = 0
-
-
-class QueryIntent:
-    INTENT_KEYWORDS = {
-        AgentType.STOCK: {
-            "strong": {
-                "price",
-                "ticker",
-                "quote",
-                "trading",
-                "share",
-                "stock",
-                "ma",
-                "moving average",
-            },
-            "weak": {"current", "value", "worth"},
-        },
-        AgentType.PORTFOLIO: {
-            "strong": {
-                "portfolio",
-                "holdings",
-                "my stocks",
-                "allocation",
-                "positions",
-                "my holdings",
-            },
-            "weak": {"performance", "return", "total"},
-        },
-        AgentType.WEBSEARCH: {
-            "strong": {"news", "latest", "recent", "breaking", "headlines", "update"},
-            "weak": {"today", "this week", "current"},
-        },
-        AgentType.RAG: {
-            "strong": {
-                "explain",
-                "what is",
-                "define",
-                "how does",
-                "why",
-                "tell me about",
-            },
-            "weak": {"information", "details", "about"},
-        },
-        AgentType.EMAIL: {
-            "strong": {"email", "send", "notify", "report", "snapshot", "mail"},
-            "weak": {"daily", "summary"},
-        },
-    }
-
-    @classmethod
-    def analyze(cls, query: str) -> Dict[AgentType, float]:
-        query_lower = query.lower()
-        scores = defaultdict(float)
-        for agent_type, keywords in cls.INTENT_KEYWORDS.items():
-            scores[agent_type] += sum(
-                0.7 for kw in keywords["strong"] if kw in query_lower
-            )
-            scores[agent_type] += sum(
-                0.3 for kw in keywords["weak"] if kw in query_lower
-            )
-        return {k: min(v, 1.0) for k, v in scores.items()}
 
 
 class MCPAgent:
@@ -114,14 +44,12 @@ class MCPAgent:
         debug: bool = False,
     ):
         self.agents = agents
+        self.llm = GroqLLM()
         self.max_concurrent = max_concurrent
         self.timeout = timeout
         self.confidence_threshold = confidence_threshold
-        self.enable_cache = enable_cache
         self.debug = debug
         self._semaphore = asyncio.Semaphore(max_concurrent)
-        self._cache = {} if enable_cache else None
-        self._cache_timestamps = {} if enable_cache else None
         self.agent_configs = {
             AgentType.STOCK: AgentConfig(
                 type=AgentType.STOCK,
@@ -176,46 +104,18 @@ class MCPAgent:
                 cache_ttl=0,
             ),
         }
+        self.cache_manager = CacheManager(enable_cache, self.agent_configs)
         self.handler_map = {
-            AgentType.STOCK: self._handle_generic,
-            AgentType.RAG: self._handle_generic,
-            AgentType.PORTFOLIO: self._handle_portfolio,
-            AgentType.EMAIL: self._handle_email,
-            AgentType.WEBSEARCH: self._handle_generic,
+            AgentType.STOCK: handle_generic,
+            AgentType.RAG: handle_generic,
+            AgentType.PORTFOLIO: handle_portfolio,
+            AgentType.EMAIL: handle_email,
+            AgentType.WEBSEARCH: handle_generic,
         }
 
     def _log(self, *msg):
         if self.debug:
             logger.info(" ".join(map(str, msg)))
-
-    def _get_cache_key(self, agent_type: str, query: str) -> str:
-        return f"{agent_type}:{hash(query.lower().strip())}"
-
-    def _get_cached(self, agent_type: str, query: str) -> Optional[str]:
-        if not self.enable_cache or not self._cache:
-            return None
-        config = self.agent_configs.get(AgentType(agent_type))
-        if not config or config.cache_ttl == 0:
-            return None
-        key = self._get_cache_key(agent_type, query)
-        if (
-            key in self._cache
-            and time.time() - self._cache_timestamps[key] < config.cache_ttl
-        ):
-            return self._cache[key]
-        self._cache.pop(key, None)
-        self._cache_timestamps.pop(key, None)
-        return None
-
-    def _set_cached(self, agent_type: str, query: str, result: str):
-        if not self.enable_cache or not self._cache:
-            return
-        config = self.agent_configs.get(AgentType(agent_type))
-        if not config or config.cache_ttl == 0:
-            return
-        key = self._get_cache_key(agent_type, query)
-        self._cache[key] = result
-        self._cache_timestamps[key] = time.time()
 
     async def _call_with_timeout(self, coro, timeout: float = None):
         try:
@@ -223,105 +123,7 @@ class MCPAgent:
         except (asyncio.TimeoutError, Exception):
             return None
 
-    async def _handle_generic(self, agent_type: AgentType, query: str) -> Optional[str]:
-        cached = self._get_cached(agent_type.value, query)
-        if cached:
-            return cached
-        async with self._semaphore:
-            agent = self.agents[agent_type.value]
-            try:
-                if hasattr(agent, "run_async"):
-                    res = await self._call_with_timeout(agent.run_async(query))
-                else:
-                    res = await asyncio.get_event_loop().run_in_executor(
-                        None, agent.run, query
-                    )
-                if res and "error" not in str(res).lower():
-                    result = f"**{agent_type.value.capitalize()} Info:** {res}"
-                    self._set_cached(agent_type.value, query, result)
-                    return result
-            except Exception as e:
-                self._log(f"{agent_type.value} error: {e}")
-        return None
-
-    async def _handle_portfolio(
-        self, agent_type: AgentType, query: str
-    ) -> Optional[str]:
-        cached = self._get_cached(agent_type.value, query)
-        if cached:
-            return cached
-        async with self._semaphore:
-            try:
-                results = await asyncio.get_event_loop().run_in_executor(
-                    None, self.agents["portfolio"].run, query
-                )
-                if not isinstance(results, list):
-                    results = [
-                        {"method": "analyze", "result": results or {}, "meta": {}}
-                    ]
-                parts = ["**Portfolio Summary:**"]
-                for action in results:
-                    result = action.get("result", {})
-                    if not result:
-                        continue
-                    method = action.get("method", "")
-                    if method == "analyze" and isinstance(result, dict):
-                        parts.append(
-                            f"**Total Value:** ${result.get('total_value', 0):,.2f}"
-                        )
-                        parts.append(
-                            f"**Total Cost:** ${result.get('total_cost', 0):,.2f}"
-                        )
-                        gain = result.get("total_gain_loss", 0)
-                        sign = "+" if gain >= 0 else ""
-                        parts.append(f"**Gain/Loss:** {sign}${gain:,.2f}")
-                    elif method == "top_holdings" and isinstance(result, list):
-                        parts.append(
-                            f"**Top Holdings ({len(result)}):** "
-                            + ", ".join(h.get("ticker", "") for h in result)
-                        )
-                    elif method == "sector_allocation" and isinstance(result, dict):
-                        parts.append(
-                            "**Sector Allocation:** "
-                            + ", ".join(f"{s}: {p}%" for s, p in result.items())
-                        )
-                    elif isinstance(result, list):
-                        parts.append(f"**Holdings:** {len(result)} items")
-                    elif isinstance(result, str):
-                        parts.append(result)
-                result_text = "\n".join(parts)
-                if len(parts) > 1:
-                    self._set_cached(agent_type.value, query, result_text)
-                    return result_text
-            except Exception as e:
-                self._log(f"Portfolio error: {e}")
-        return None
-
-    async def _handle_email(self, agent_type: AgentType, query: str) -> Optional[str]:
-        async with self._semaphore:
-            try:
-                normalized = (
-                    "daily snapshot"
-                    if any(
-                        kw in query.lower()
-                        for kw in ["send", "email", "mail", "report"]
-                    )
-                    else query
-                )
-                res = await asyncio.get_event_loop().run_in_executor(
-                    None, self.agents["email"].run, normalized
-                )
-                if (
-                    res
-                    and "error" not in str(res).lower()
-                    and "unrecognized" not in str(res).lower()
-                ):
-                    return f"**Email:** {res}"
-            except Exception as e:
-                self._log(f"Email error: {e}")
-        return None
-
-    def _route_query(self, query: str) -> List[tuple[AgentType, str, float]]:
+    def _route_query(self, query: str) -> List[Tuple[AgentType, str, float]]:
         intent_scores = QueryIntent.analyze(query)
         selected = []
         for agent_type, config in self.agent_configs.items():
@@ -336,7 +138,7 @@ class MCPAgent:
         return selected
 
     async def _execute_agents(
-        self, agents_to_run: List[tuple[AgentType, str, float]]
+        self, agents_to_run: List[Tuple[AgentType, str, float]]
     ) -> List[str]:
         independent = [
             (at, q, c)
@@ -351,38 +153,121 @@ class MCPAgent:
         results = []
         for group in [independent, dependent]:
             if group:
-                tasks = [self.handler_map[at](at, q) for at, q, c in group]
+                tasks = [self.handler_map[at](self, at, q) for at, q, c in group]
                 results.extend([r for r in await asyncio.gather(*tasks) if r])
         return results
 
-    def _merge_responses(self, responses: List[str]) -> str:
-        if not responses:
-            return "Couldn't find relevant info. Rephrase?"
-        seen = set()
-        unique = [r for r in responses if r[:50] not in seen and not seen.add(r[:50])]
-        return "\n\n".join(unique)
-
-    async def run(self, query: str) -> tuple[str, List[str]]:
-        agents_to_run = self._route_query(query)
-        selected_names = [at.value for at, _, _ in agents_to_run]
-        self._log(
-            f"Query: {query}",
-            f"Selected: {selected_names}",
-            f"Scores: {[(at.value, c) for at, _, c in agents_to_run]}",
-        )
-        results = await self._execute_agents(agents_to_run)
-        self._log(f"Results: {[r[:50] if r else 'None' for r in results]}")
-        response = self._merge_responses(results)
-        return response, selected_names
-
     def clear_cache(self):
-        if self._cache:
-            self._cache.clear()
-            self._cache_timestamps.clear()
+        self.cache_manager.clear_cache()
 
     def get_cache_stats(self) -> Dict:
-        return {
-            "enabled": self.enable_cache,
-            "size": len(self._cache) if self._cache else 0,
-            "entries": list(self._cache.keys()) if self._cache else [],
-        }
+        return self.cache_manager.get_cache_stats()
+
+    async def _generate_final_answer(
+        self,
+        query: str,
+        agent_results: List[Dict],
+        language: str = "English",
+        style: str = "professional",
+    ) -> str:
+        """
+        Generate a final Markdown response using Groq LLM based on all agent outputs.
+        """
+        agent_summary = build_agent_summary(query, agent_results)
+        system_prompt = create_system_prompt(language=language, style=style)
+
+        final_prompt = (
+            f"{system_prompt}\n\n"
+            f"{agent_summary}\n\n"
+            f"All agent sources have been included as Markdown links above.\n"
+            f"TASK: Synthesize the information above into a single coherent Markdown response with inline citations."
+        )
+
+        answer = await self.llm.call_async(
+            prompt=final_prompt, model="llama-3.3-70b-versatile", max_tokens=1024
+        )
+
+        if isinstance(answer, dict):
+            return str(answer.get("plan") or answer.get("content") or "")
+        elif isinstance(answer, list):
+            return "\n".join(str(a) for a in answer)
+        elif isinstance(answer, str):
+            return answer
+        else:
+            self._log(f"Unexpected LLM output type: {type(answer).__name__}")
+            return str(answer)
+
+    async def _merge_responses(
+        self,
+        query: str,
+        agent_results: List[Dict],
+        language: str = "English",
+        style: str = "professional",
+    ) -> Dict:
+        """
+        Deduplicate agent results, collect sources, and synthesize final answer.
+        """
+        if not agent_results:
+            return {"response": "Couldn't find relevant info. Rephrase?", "sources": []}
+
+        seen = set()
+        unique_results = []
+        all_sources = []
+        for r in agent_results:
+            if not isinstance(r, dict):
+                r = {"content": str(r), "answer": str(r), "sources": []}
+            key = str(r.get("content") or r.get("answer", ""))[:50]
+            if key not in seen:
+                seen.add(key)
+                unique_results.append(r)
+                # Collect sources
+                all_sources.extend(r.get("sources", []))
+
+        final_answer = await self._generate_final_answer(
+            query, unique_results, language, style
+        )
+
+        return {"response": final_answer, "sources": all_sources}
+
+    async def run(
+        self, query: str, language: str = "English", style: str = "professional"
+    ) -> Tuple[Dict, List[str], bool]:
+        # Check cache
+        cached_response = self.cache_manager.get_cached("final_response", query)
+        if cached_response:
+            return cached_response, [], True
+
+        # Determine which agents to run
+        agents_to_run = self._route_query(query)
+        selected_names = [at.value for at, _, _ in agents_to_run]
+
+        # Execute agents concurrently
+        results = await self._execute_agents(agents_to_run)
+
+        # Print sources per agent
+        for res in results:
+            agent_type = (
+                res.get("type", "unknown") if isinstance(res, dict) else "unknown"
+            )
+            sources = res.get("sources", []) if isinstance(res, dict) else []
+            print(f"\n🟢 [AGENT: {agent_type.upper()}] Sources:")
+
+            if sources:
+                for i, src in enumerate(sources, start=1):
+                    # Ensure dictionary format for printing
+                    if isinstance(src, dict):
+                        src_name = src.get("source", "Unknown")
+                        score = src.get("score", 0)
+                        print(f"  🔹 {i}. {src_name} (score: {score})")
+                    else:
+                        print(f"  🔹 {i}. {src}")
+            else:
+                print("  ⚠️ No sources found.")
+
+        # Merge responses & aggregate sources
+        final_result = await self._merge_responses(query, results, language, style)
+
+        # Cache final result
+        self.cache_manager.set_cached("final_response", query, final_result)
+
+        return final_result, selected_names, False
