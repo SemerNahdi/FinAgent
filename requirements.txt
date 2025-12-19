@@ -15,3 +15,6 @@ aiohttp
 async-timeout
 fastapi
 uvicorn
+pytest-asyncio
+langdetect
+
