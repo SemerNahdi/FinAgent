@@ -64,6 +64,8 @@ class QueryResponse(BaseModel):
     agents_used: Optional[list] = None
     cache_hit: Optional[bool] = None
     language_info: Optional[LanguageInfo] = None
+    translated: Optional[bool] = None
+    original_question: Optional[str] = None
 
 
 class CacheStats(BaseModel):
@@ -79,26 +81,47 @@ async def ask(query: Query, style: str = "professional"):
 
     Flow:
     1. Detect language and dialect (local first, Groq fallback)
-    2. Get appropriate response language
-    3. Process query with MCP agents
-    4. Return response in detected language/dialect
+    2. Translate query to English if not already in English
+    3. Get appropriate response language
+    4. Process translated query with MCP agents
+    5. Return response in detected language/dialect
     """
     try:
         # Step 1: Detect language and dialect
         detection_result = await language_service.detect(query.question)
-
+        
         # Step 2: Get response language and instruction
         response_language = language_service.get_response_language(detection_result)
-
-        # Step 3: Process query with MCP agents
+        
+        # Step 2.5: Translate query to English if not already in English
+        original_question = query.question
+        processed_question = original_question
+        was_translated = False
+        
+        if detection_result.language.lower() != "english":
+            processed_question = await language_service.translate_to_english(
+                original_question, 
+                detection_result.language
+            )
+            was_translated = processed_question != original_question
+        
+        # Step 3: Process query with MCP agents (using translated English query)
         # Pass the response instruction to ensure proper language/dialect in response
         final_result, agents_used, cache_hit = await mcp.run(
-            query.question,
+            processed_question,
             language=response_language,
             style=style,
         )
 
-        # Step 4: Return response with language info
+        # Step 4: Handle response format (ensure it's a dict)
+        if isinstance(final_result, str):
+            # Fallback if result is still a string (shouldn't happen with cache fix)
+            final_result = {"response": final_result, "sources": []}
+        elif not isinstance(final_result, dict):
+            # Convert other types to dict
+            final_result = {"response": str(final_result), "sources": []}
+
+        # Step 5: Return response with language info
         return {
             "response": final_result.get("response", ""),
             "sources": final_result.get("sources", []),
@@ -111,6 +134,8 @@ async def ask(query: Query, style: str = "professional"):
                 "is_dialect": detection_result.is_dialect,
                 "detected_by": detection_result.detected_by,
             },
+            "translated": was_translated,
+            "original_question": original_question if was_translated else None,
         }
 
     except Exception as e:

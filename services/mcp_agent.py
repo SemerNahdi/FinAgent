@@ -1,6 +1,4 @@
 # File: mcp_agent.py
-# Main MCPAgent class that ties everything together
-# Imports from other files
 
 import re
 from typing import Dict, List, Optional, Tuple
@@ -126,20 +124,40 @@ class MCPAgent:
     def _route_query(self, query: str) -> List[Tuple[AgentType, str, float]]:
         intent_scores = QueryIntent.analyze(query)
         selected = []
+
+        self._log(
+            f"Intent scores: {[(k.value, v) for k, v in intent_scores.items() if v > 0]}"
+        )
+
         for agent_type, config in self.agent_configs.items():
             confidence = intent_scores.get(agent_type, 0.0)
+            # Boost confidence if pattern matches
             if config.pattern.search(query):
                 confidence = max(confidence, 0.5)
-            if confidence >= self.confidence_threshold:
+
+            # Lower threshold for multi-intent queries (allow more agents)
+            threshold = self.confidence_threshold
+            if len([s for s in intent_scores.values() if s > 0]) > 1:
+                # Multi-intent query - be more permissive
+                threshold = max(0.2, threshold - 0.1)
+
+            if confidence >= threshold:
                 selected.append((agent_type, query, confidence))
+                self._log(
+                    f"Selected agent: {agent_type.value} (confidence: {confidence:.2f})"
+                )
+
         if not selected:
-            selected = [(AgentType.RAG, query, 0.5)]
+            self._log("No agents selected - query may be out of scope")
+            return []
+
         selected.sort(key=lambda x: (-x[2], self.agent_configs[x[0]].priority))
+        self._log(f"Final agent selection: {[at.value for at, _, _ in selected]}")
         return selected
 
     async def _execute_agents(
         self, agents_to_run: List[Tuple[AgentType, str, float]]
-    ) -> List[str]:
+    ) -> List[Dict]:
         independent = [
             (at, q, c)
             for at, q, c in agents_to_run
@@ -154,7 +172,24 @@ class MCPAgent:
         for group in [independent, dependent]:
             if group:
                 tasks = [self.handler_map[at](self, at, q) for at, q, c in group]
-                results.extend([r for r in await asyncio.gather(*tasks) if r])
+                agent_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for i, res in enumerate(agent_results):
+                    if isinstance(res, Exception):
+                        self._log(f"Agent {group[i][0].value} raised exception: {res}")
+                        continue
+                    if res is None:
+                        continue
+                    # Normalize to dict if needed
+                    if not isinstance(res, dict):
+                        res = {
+                            "type": group[i][0].value,
+                            "content": str(res),
+                            "sources": [],
+                            "query": group[i][1],
+                            "raw_data": res,
+                        }
+                    results.append(res)
         return results
 
     def clear_cache(self):
@@ -162,6 +197,69 @@ class MCPAgent:
 
     def get_cache_stats(self) -> Dict:
         return self.cache_manager.get_cache_stats()
+
+    async def _generate_no_agent_response(
+        self,
+        query: str,
+        language: str = "English",
+        style: str = "professional",
+    ) -> str:
+        """
+        Generate a graceful response when no agents are selected for the query.
+        Uses LLM to create a contextually appropriate response.
+        """
+        query_lower = query.lower().strip()
+
+        # Detect simple greetings
+        greeting_patterns = [
+            "hey",
+            "hi",
+            "hello",
+            "greetings",
+            "what's up",
+            "howdy",
+            "who are you",
+            "what are you",
+            "introduce yourself",
+            "tell me about yourself",
+        ]
+
+        is_greeting = any(pattern in query_lower for pattern in greeting_patterns)
+
+        if is_greeting:
+            # Simple, friendly greeting response
+            if "who are you" in query_lower or "what are you" in query_lower:
+                return "Hey! I'm your helpful finance assistant. I can help you with stock prices, portfolio analysis, market news, and other financial topics. What would you like to know?"
+            else:
+                return "Hey! I'm here to help with your finance questions. What can I help you with today?"
+
+        system_prompt = create_system_prompt(language=language, style=style)
+
+        no_agent_prompt = (
+            f"{system_prompt}\n\n"
+            f"User Query: {query}\n\n"
+            f"TASK: Respond to the user's query in a concise, friendly way:\n"
+            f"- If it's a greeting, respond simply (1-2 sentences max)\n"
+            f"- If it's a non-financial question, politely explain you specialize in financial topics (1-2 sentences)\n"
+            f"- Keep it SHORT and natural - no long explanations or lists\n"
+            f"- Do NOT mention agents, tools, or technical details\n"
+            f"- Respond in {language} using {style} style\n"
+            f"- Be conversational and friendly"
+        )
+
+        answer = await self.llm.call_async(
+            prompt=no_agent_prompt, model="llama-3.3-70b-versatile", max_tokens=200
+        )
+
+        if isinstance(answer, dict):
+            return str(answer.get("plan") or answer.get("content") or "")
+        elif isinstance(answer, list):
+            return "\n".join(str(a) for a in answer)
+        elif isinstance(answer, str):
+            return answer
+        else:
+            self._log(f"Unexpected LLM output type: {type(answer).__name__}")
+            return str(answer)
 
     async def _generate_final_answer(
         self,
@@ -175,14 +273,15 @@ class MCPAgent:
         """
         agent_summary = build_agent_summary(query, agent_results)
         system_prompt = create_system_prompt(language=language, style=style)
-
         final_prompt = (
             f"{system_prompt}\n\n"
+            f"USER QUERY:\n{query}\n\n"
             f"{agent_summary}\n\n"
-            f"All agent sources have been included as Markdown links above.\n"
-            f"TASK: Synthesize the information above into a single coherent Markdown response with inline citations."
+            f"TASK:\n"
+            f"- Answer the user query using ONLY the information above.\n"
+            f"- Follow all system rules strictly.\n"
+            f"- Output a clean, well-structured Markdown response.\n"
         )
-
         answer = await self.llm.call_async(
             prompt=final_prompt, model="llama-3.3-70b-versatile", max_tokens=1024
         )
@@ -239,6 +338,21 @@ class MCPAgent:
 
         # Determine which agents to run
         agents_to_run = self._route_query(query)
+
+        # Handle case when no agents are selected
+        if not agents_to_run:
+            self._log("No agents selected for query, generating graceful response")
+            graceful_response = await self._generate_no_agent_response(
+                query, language, style
+            )
+            final_result = {
+                "response": graceful_response,
+                "sources": [],
+            }
+            # Cache the response
+            self.cache_manager.set_cached("final_response", query, final_result)
+            return final_result, [], False
+
         selected_names = [at.value for at, _, _ in agents_to_run]
 
         # Execute agents concurrently
