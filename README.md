@@ -1,114 +1,138 @@
-# Finance  Agent
+# Finance Agent: Multi-Agent Financial Assistant
 
-A multi-agent financial assistant. Built with FastAPI, FAISS, and LLM integration .
+[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Groq](https://img.shields.io/badge/Groq-f3d03e?style=for-the-badge&logo=groq&logoColor=black)](https://groq.com/)
+[![FAISS](https://img.shields.io/badge/FAISS-blue?style=for-the-badge)](https://github.com/facebookresearch/faiss)
+
+A state-of-the-art multi-agent financial assistant built with **FastAPI**, **FAISS**, and **Groq LLM**. This assistant orchestrates specialized agents to handle RAG (Retrieval-Augmented Generation), stock analysis, portfolio management, web search, and automated emailing.
 
 ---
 
-## Table of Contents
+## Features
 
-* [Project Structure](#project-structure)
-* [Requirements](#requirements)
-* [Setup](#setup)
-* [Data](#data)
-* [Usage](#usage)
-
-  * [Indexing Data](#indexing-data)
-  * [Querying](#querying)
-* [Agents & Tools](#agents--tools)
-* [Extending / Customization](#extending--customization)
-* [License](#license)
+- 🧠 **MCP Orchestrator**: Intelligent query routing with concurrency and caching.
+- 📚 **Advanced RAG**: Ingests PDFs, CSVs, and JSONs to provide context-aware financial answers.
+- 💹 **Stock Intelligence**: Real-time ticker summaries and price tracking via `yfinance`.
+- 📊 **Portfolio Analyzer**: Track holdings, calculate P/L, and view sector allocations.
+- 📬 **Automated Emailing**: Receive daily portfolio snapshots and performance reports.
+- 🌐 **Web Search**: Real-time financial news integration via NewsAPI.
+- 🌍 **Multilingual**: Automatic language detection and dialect-aware responses.
 
 ---
 
 ## Project Structure
 
-```
-backend/
-├─ main.py                     # FastAPI entry point
-├─ api/
-│   └─ routes.py               # Endpoints: /chat, /upload, /status
-├─ services/
-│   ├─ mcp_agent.py            # MCP agent orchestrator
-│   ├─ agents/
-│   │   ├─ rag_agent.py        # Orchestrates RAG tasks
-│   │   ├─ stock_agent.py
-│   │   ├─ portfolio_agent.py
-│   │   └─ summarizer_agent.py
-│   ├─ rag/                    # RAG module
-│   │   ├─ embeddings.py
-│   │   ├─ chunking.py
-│   │   ├─ parser.py
-│   │   └─ rag_tool.py
-│   ├─ tools/
-│   │   ├─ stock_tool.py
-│   │   ├─ portfolio_tool.py
-│   │   └─ summarizer_tool.py
-├─ db/
-│   └─ embeddings_db.py
-├─ models/
-│   └─ query_models.py
-└─ requirements.txt
-data/
-└─ ...                        # PDFs, CSVs, JSONs, metadata
+```text
+📁 .
+  📄 main.py                   # FastAPI entry point
+  📁 api/
+    📄 routes.py               # API endpoints 
+  📁 services/
+    📄 mcp_agent.py            # Central Orchestrator
+    📁 agents/                 # Specialized AI Agents
+      📄 rag_agent.py
+      📄 stock_agent.py
+      📄 portfolio_agent.py
+      📄 email_agent.py
+      📄 websearch_agent.py
+    📁 tools/                  # Core logic & Utility tools
+      📄 stock_tool.py
+      📄 websearch_tool.py
+      📄 groq_wrapper.py
+    📁 rag/                    # RAG Implementation
+      📄 embeddings.py         # FAISS & Sentence Transformers
+      📄 chunking.py           # Text splitting logic
+      📄 parser.py             # Document parsing (PDF, CSV, JSON)
+    📁 email/                  # Emailing services
+  📁 data/                     # Source documents & FAISS index
+  📁 db/                       # Vector database storage
+  📄 requirements.txt          # Project dependencies
 ```
 
 ---
 
-## Requirements
+##  Setup & Installation
 
-Install via:
+### 1. Clone the Repository
+```bash
+git clone https://github.com/SemerNahdi/FinAgent.git
+cd FinAgent
+```
 
+### 2. Create a Virtual Environment
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+### 3. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
----
+### 4. Configure Environment Variables
+Create a `.env` file in the root directory and add the following keys:
 
-## Setup
+```env
+# --- LLM & Search ---
+GROQ_API_KEY=your_groq_api_key_here
+NEWS_API_KEY=your_newsapi_key_here
 
-1. Clone the repo:
+# --- RAG Settings ---
+EMBED_MODEL=all-MiniLM-L6-v2
+RAG_DATA_DIR=./data
+RAG_INDEX_DIR=./data/finance_agent_index
 
-```bash
-git clone https://github.com/SemerNahdi/FinAgent.git
-cd Finance-agent
-```
-
-2. Place your data files in `./data`:
-
-* PDFs (annual reports, earnings calls, etc.)
-* CSVs (portfolio, metadata, etc.)
-* JSON (schemas, portfolio schema)
-
-3. Set environment variables if needed:
-
-```bash
-export RAG_DATA_DIR="./data"
-export RAG_INDEX_DIR="./data/faiss_index"
-export EMBED_MODEL="all-MiniLM-L6-v2"
+# --- Email Settings (SMTP) ---
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=your_email@gmail.com
+EMAIL_PASSWORD=your_app_password
+EMAIL_SENDER_NAME="FinAgent Assistant"
 ```
 
 ---
 
-## Usage
+## 📖 Usage
 
-### Indexing Data
-
-Run the RAG ingest script once to parse, chunk, and embed documents:
+### 📥 Data Ingestion (RAG)
+Place your financial documents (PDF, CSV, JSON) in the `./data` directory, then run the ingestion tool:
 
 ```bash
-python backend/services/rag/rag_tool.py --ingest
+python services/rag/rag_tool.py --ingest
 ```
 
-* Builds FAISS index under `./data/faiss_index`
-* Stores metadata for retrieval
+### 🚀 Start the API
+Run the server using Uvicorn:
+
+```bash
+uvicorn main:app --reload
+```
+The API will be available at `http://localhost:8000`.
+
+### 💬 Example Queries
+You can interact with the agent via the `/api/ask` endpoint:
+
+- **Stock**: "What is the current price of NVDA?"
+- **Portfolio**: "Show me my sector allocation."
+- **RAG**: "Explain the risk factors mentioned in the latest earnings report."
+- **Email**: "Send the daily portfolio snapshot to my email."
+- **Web**: "What are the latest headlines about interest rates?"
 
 ---
 
-## Agents & Tools
+## 🧪 Testing
 
-* **MCP Agent**: Orchestrates multiple agents
-* **RAG Agent**: Handles document ingestion and retrieval
-* **Stock Agent / Tool**: Financial stock queries
-* **Portfolio Agent / Tool**: Portfolio analysis and simulation
-* **Summarizer Agent / Tool**: Summarizes retrieved data
+Run the test suite using `pytest`:
+```bash
+pytest tests/
+```
 
+
+##  License
+
+Distributed under the MIT License. See `LICENSE` for more information.
+
+---
+*Created by [Semer Nahdi](mailto:semernahdi25@gmail.com)*
