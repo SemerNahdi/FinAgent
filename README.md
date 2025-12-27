@@ -7,17 +7,19 @@
 
 A state-of-the-art multi-agent financial assistant built with **FastAPI**, **FAISS**, and **Groq LLM**. This assistant orchestrates specialized agents to handle RAG (Retrieval-Augmented Generation), stock analysis, portfolio management, web search, and automated emailing.
 
+**Frontend Repository:** [finance-agent-frontend](https://github.com/SemerNahdi/finance-agent-frontend)
+
 ---
 
 ## Features
 
-- 🧠 **MCP Orchestrator**: Intelligent query routing with concurrency and caching.
-- 📚 **Advanced RAG**: Ingests PDFs, CSVs, and JSONs to provide context-aware financial answers.
-- 💹 **Stock Intelligence**: Real-time ticker summaries and price tracking via `yfinance`.
-- 📊 **Portfolio Analyzer**: Track holdings, calculate P/L, and view sector allocations.
-- 📬 **Automated Emailing**: Receive daily portfolio snapshots and performance reports.
-- 🌐 **Web Search**: Real-time financial news integration via NewsAPI.
-- 🌍 **Multilingual**: Automatic language detection and dialect-aware responses.
+- **MCP Orchestrator**: Intelligent query routing with concurrency and caching.
+- **Advanced RAG**: Ingests PDFs, CSVs, and JSONs to provide context-aware financial answers.
+- **Stock Intelligence**: Real-time ticker summaries and price tracking via `yfinance`.
+- **Portfolio Analyzer**: Track holdings, calculate P/L, and view sector allocations.
+- **Automated Emailing**: Receive daily portfolio snapshots and performance reports.
+- **Web Search**: Real-time financial news integration via NewsAPI.
+- **Multilingual**: Automatic language detection and dialect-aware responses.
 
 ---
 
@@ -94,16 +96,16 @@ EMAIL_SENDER_NAME="FinAgent Assistant"
 
 ---
 
-## 📖 Usage
+## Usage
 
-### 📥 Data Ingestion (RAG)
+### Data Ingestion (RAG)
 Place your financial documents (PDF, CSV, JSON) in the `./data` directory, then run the ingestion tool:
 
 ```bash
 python services/rag/rag_tool.py --ingest
 ```
 
-### 🚀 Start the API
+### Start the API
 Run the server using Uvicorn:
 
 ```bash
@@ -111,7 +113,7 @@ uvicorn main:app --reload
 ```
 The API will be available at `http://localhost:8000`.
 
-### 💬 Example Queries
+### Example Queries
 You can interact with the agent via the `/api/ask` endpoint:
 
 - **Stock**: "What is the current price of NVDA?"
@@ -122,7 +124,7 @@ You can interact with the agent via the `/api/ask` endpoint:
 
 ---
 
-## 🧪 Testing
+## Testing
 
 Run the test suite using `pytest`:
 ```bash
